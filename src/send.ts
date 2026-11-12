@@ -12,7 +12,8 @@ import {
 } from "viem";
 import { blueAbi, callbackAbi, erc20Abi, midnightAbi } from "./abi.ts";
 
-export type SignerOptions = { kind: "trezor"; hdPath?: string } | { kind: "unlocked" };
+export type SignerOptions =
+  { kind: "trezor"; hdPath?: string } | { kind: "unlocked" };
 
 export type Sender = {
   from: Address;
@@ -23,28 +24,48 @@ export type Sender = {
 
 const errorAbis: Abi[] = [midnightAbi, callbackAbi, blueAbi, erc20Abi];
 
-function run(cmd: string, args: string[], stdin: "inherit" | "ignore" = "inherit"): Promise<string> {
+function run(
+  cmd: string,
+  args: string[],
+  stdin: "inherit" | "ignore" = "inherit",
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { stdio: [stdin, "pipe", "inherit"] });
     let out = "";
     child.stdout.on("data", (d) => (out += d));
     child.on("error", reject);
-    child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(`${cmd} exited with code ${code}`))));
+    child.on("close", (code) =>
+      code === 0
+        ? resolve(out)
+        : reject(new Error(`${cmd} exited with code ${code}`)),
+    );
   });
 }
 
 function signerArgs(s: SignerOptions, from: Address): string[] {
   if (s.kind === "unlocked") return ["--unlocked", "--from", from];
-  return ["--trezor", ...(s.hdPath ? ["--mnemonic-derivation-path", s.hdPath] : [])];
+  return [
+    "--trezor",
+    ...(s.hdPath ? ["--mnemonic-derivation-path", s.hdPath] : []),
+  ];
 }
 
 // Refuses to continue unless the Trezor account at the chosen path is the expected address.
 export async function checkSigner(sender: Sender): Promise<void> {
   if (sender.signer.kind !== "trezor") return;
-  console.log("Reading address from Trezor (confirm on the device if asked)...");
-  const out = await run("cast", ["wallet", "address", ...signerArgs(sender.signer, sender.from)]);
+  console.log(
+    "Reading address from Trezor (confirm on the device if asked)...",
+  );
+  const out = await run("cast", [
+    "wallet",
+    "address",
+    ...signerArgs(sender.signer, sender.from),
+  ]);
   const addr = getAddress(out.trim());
-  if (addr !== sender.from) throw new Error(`Trezor address ${addr} does not match --from ${sender.from}. Check --hd-path.`);
+  if (addr !== sender.from)
+    throw new Error(
+      `Trezor address ${addr} does not match --from ${sender.from}. Check --hd-path.`,
+    );
   console.log(`Trezor address OK: ${addr}`);
 }
 
@@ -59,20 +80,34 @@ export async function confirm(sender: Sender, question: string): Promise<void> {
 export function describeRevert(err: unknown): string {
   if (err instanceof BaseError) {
     const revert = err.walk((e) => e instanceof ContractFunctionRevertedError);
-    if (revert instanceof ContractFunctionRevertedError && (revert.reason || revert.data?.errorName)) {
+    if (
+      revert instanceof ContractFunctionRevertedError &&
+      (revert.reason || revert.data?.errorName)
+    ) {
       return revert.reason ?? revert.data!.errorName;
     }
-    const raw = err.walk((e) => typeof (e as { data?: unknown }).data === "string") as { data?: Hex } | null;
+    const raw = err.walk(
+      (e) => typeof (e as { data?: unknown }).data === "string",
+    ) as { data?: Hex } | null;
     if (raw?.data) {
       for (const abi of errorAbis) {
         try {
-          const { errorName, args } = decodeErrorResult({ abi, data: raw.data });
-          return errorName === "Error" && typeof args?.[0] === "string" ? args[0] : errorName;
-        } catch {}
+          const { errorName, args } = decodeErrorResult({
+            abi,
+            data: raw.data,
+          });
+          return errorName === "Error" && typeof args?.[0] === "string"
+            ? args[0]
+            : errorName;
+        } catch {
+          continue;
+        }
       }
     }
     // e.g. anvil's "EVM error NotActivated" behind viem's generic "An internal error was received."
-    return err.details && err.details !== err.shortMessage ? `${err.shortMessage} (${err.details})` : err.shortMessage;
+    return err.details && err.details !== err.shortMessage
+      ? `${err.shortMessage} (${err.details})`
+      : err.shortMessage;
   }
   return String(err);
 }
@@ -82,11 +117,21 @@ export function describeRevert(err: unknown): string {
 // are pinned to at least this block and retried briefly.
 let lastSentBlock = 0n;
 
-async function simulate(client: PublicClient, from: Address, to: Address, data: Hex): Promise<void> {
+async function simulate(
+  client: PublicClient,
+  from: Address,
+  to: Address,
+  data: Hex,
+): Promise<void> {
   for (let attempt = 1; ; attempt++) {
     try {
       const latest = await client.getBlockNumber();
-      await client.call({ account: from, to, data, blockNumber: latest > lastSentBlock ? latest : lastSentBlock });
+      await client.call({
+        account: from,
+        to,
+        data,
+        blockNumber: latest > lastSentBlock ? latest : lastSentBlock,
+      });
       return;
     } catch (err) {
       if (lastSentBlock === 0n || attempt === 4) throw err;
@@ -96,18 +141,29 @@ async function simulate(client: PublicClient, from: Address, to: Address, data: 
 }
 
 // Simulates the call from the user's address, then (after confirmation) signs and sends it with `cast send`.
-export async function send(client: PublicClient, sender: Sender, label: string, to: Address, data: Hex): Promise<void> {
+export async function send(
+  client: PublicClient,
+  sender: Sender,
+  label: string,
+  to: Address,
+  data: Hex,
+): Promise<void> {
   console.log(`\n--- ${label}`);
   console.log(`to:   ${to}`);
   console.log(`data: ${data}`);
   try {
     await simulate(client, sender.from, to, data);
   } catch (err) {
-    throw new Error(`Simulation of "${label}" failed: ${describeRevert(err)}`);
+    throw new Error(`Simulation of "${label}" failed: ${describeRevert(err)}`, {
+      cause: err,
+    });
   }
   console.log("simulation: OK");
   await confirm(sender, `Send "${label}"?`);
-  if (sender.signer.kind === "trezor") console.log("Confirm the transaction on the Trezor. Check that 'to' matches the address above.");
+  if (sender.signer.kind === "trezor")
+    console.log(
+      "Confirm the transaction on the Trezor. Check that 'to' matches the address above.",
+    );
   const out = await run("cast", [
     "send",
     "--json",
@@ -117,8 +173,13 @@ export async function send(client: PublicClient, sender: Sender, label: string, 
     to,
     data,
   ]);
-  const receipt = JSON.parse(out) as { status: string; transactionHash: Hex; blockNumber: string | number };
-  if (receipt.status !== "0x1" && receipt.status !== "1") throw new Error(`Transaction ${receipt.transactionHash} reverted`);
+  const receipt = JSON.parse(out) as {
+    status: string;
+    transactionHash: Hex;
+    blockNumber: string | number;
+  };
+  if (receipt.status !== "0x1" && receipt.status !== "1")
+    throw new Error(`Transaction ${receipt.transactionHash} reverted`);
   lastSentBlock = BigInt(receipt.blockNumber);
   console.log(`sent: ${receipt.transactionHash}`);
 }
