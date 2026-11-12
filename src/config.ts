@@ -16,11 +16,21 @@ export const DEFAULT_RPC = "https://ethereum-rpc.publicnode.com";
 
 export type LoanConfig = { symbol: string; decimals: number; blueMarketId: Hex };
 
+// Explicitly reviewed exception; never broaden oracle matching for other markets.
+export const WSTETH_DESTINATION: Hex = "0x20db6336fa557dab4d29e3d6c3eaca63d99911b8d9106c4642c165b054ce4f03";
+export const WSTETH_BLUE_ORACLE: Address = "0x48F7E36EB6B826B2dF4B2E630B62Cd25e89E40e2";
+export const WSTETH_MIDNIGHT_ORACLE: Address = "0xe087ad7fe989cf63f8383579d160a20ee7e69f9f";
+
 export const LOANS: Record<string, LoanConfig> = {
   wbtc: {
     symbol: "WBTC",
     decimals: 8,
     blueMarketId: "0x3a85e619751152991742810df6ec69ce473daef99e28a64ab2340d7b7ccfee49",
+  },
+  wsteth: {
+    symbol: "wstETH",
+    decimals: 18,
+    blueMarketId: "0xb323495f7e4148be5643a4ea4a8221eef163e4bccfdedc2a6f4696baacbc86cc",
   },
   cbbtc: {
     symbol: "cbBTC",

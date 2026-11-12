@@ -28,7 +28,7 @@ let anvil: ChildProcess;
 async function cli(...args: string[]) {
   const { stdout } = await promisify(execFile)(
     "node",
-    ["src/cli.ts", ...args, "--from", USER, "--rpc-url", LOCAL, "--signer", "unlocked", "--yes"],
+    ["src/cli.ts", ...args, ...(process.env.MARKET ? ["--market", process.env.MARKET] : []), "--from", USER, "--rpc-url", LOCAL, "--signer", "unlocked", "--yes"],
     { maxBuffer: 10 * 1024 * 1024 },
   ).catch((err) => {
     throw new Error(`cli ${args.join(" ")} failed:\n${err.stdout}\n${err.stderr}`);
@@ -52,11 +52,11 @@ before(async () => {
 
 after(() => anvil?.kill());
 
-for (const [key, loan] of Object.entries(LOANS)) {
+for (const [key, loan] of Object.entries(LOANS).filter(([key]) => !process.env.LOAN || key === process.env.LOAN)) {
   test(`migrate + cleanup ${loan.symbol}`, async (t) => {
     const before = await readBlue(client, loan.blueMarketId, USER);
     if (before.borrowShares === 0n) return t.skip("no Blue debt left to migrate");
-    const [target] = (await findMirrorMarkets(before.marketParams)).filter((c) => isoDate(c.market.maturity) === MATURITY);
+    const [target] = (await findMirrorMarkets(before.marketParams, process.env.MARKET as `0x${string}` | undefined)).filter((c) => isoDate(c.market.maturity) === MATURITY);
 
     await cli("migrate", "--loan", key, "--maturity", MATURITY, "--max-rate", "8");
     const mid = await readBlue(client, loan.blueMarketId, USER);
@@ -88,6 +88,7 @@ for (const [key, loan] of Object.entries(LOANS)) {
   });
 
   test(`roll ${loan.symbol} ${MATURITY} -> ${ROLL_MATURITY}`, async (t) => {
+    if (process.env.SKIP_ROLL === "1") return t.skip("migration-only rehearsal");
     const { marketParams } = await readBlue(client, loan.blueMarketId, USER);
     const mirrors = await findMirrorMarkets(marketParams);
     const withPositions = await Promise.all(mirrors.map(async (c) => ({ c, pos: await readMidnightPosition(client, c, USER) })));

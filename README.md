@@ -1,6 +1,6 @@
 # morpho-fixed-borrow
 
-Manages fixed-rate Morpho Midnight USDC loans (WBTC/USDC and cbBTC/USDC on Ethereum) over their whole life, signing
+Manages fixed-rate Morpho Midnight USDC loans (WBTC/USDC and cbBTC/USDC on Ethereum), plus explicitly selected wstETH migrations (see below), signing
 with a Trezor through Foundry's `cast`:
 
 1. **Migrate** a Morpho Blue variable-rate loan into a Midnight fixed-rate market (`migrate`, then `cleanup`).
@@ -132,3 +132,42 @@ node src/cli.ts roll --loan wbtc --from-maturity 2026-12-25 --maturity 2027-03-2
   Midnight loan back to the Blue variable-rate market instead of repaying it in USDC. Tenor's
   `BorrowMidnightToBlueCallback` on Ethereum (`0x7d4A92F88c22c6dD31F0fB67F27cAFC8e90f5F18`) is built for this. Not
   implemented yet; it would need its own source review, sizing rules and fork test before use.
+
+## wstETH: explicitly selected December 2026 market
+
+Work in the `wsteth-midnight` worktree. wstETH uses 18 decimals. The Blue market is
+`0xb323495f7e4148be5643a4ea4a8221eef163e4bccfdedc2a6f4696baacbc86cc`.
+The reviewed destination is `0x20db6336fa557dab4d29e3d6c3eaca63d99911b8d9106c4642c165b054ce4f03`,
+maturing **2026-12-25 15:00 UTC**. Both use 86% LLTV, but the destination uses a different oracle.
+The default same-oracle search still excludes it. Use `--market` explicitly for quote, migrate, cleanup and status.
+Only this exact destination permits the reviewed source/destination oracle exception; other markets remain strict.
+
+Destination oracle `0xe087ad7fe989cf63f8383579d160a20ee7e69f9f` is verified MorphoChainlinkOracleV2:
+base feeds `0x4F67e4d9BD67eFa28236013288737D39AeF48e79` (custom wstETH/ETH) and
+`0xc0053f3FBcCD593758258334Dfce24C2A9A673aD` (ETH/USD), no quote feeds (USDC assumed $1).
+The oracle does not enforce feed staleness. Source verification and live feed reads are not an audit of the feeds.
+The migration plan shows both raw oracle prices and their percentage difference.
+
+```sh
+export ETH_FROM=0xYourAddress
+export HD_PATH="m/44'/60'/0'/0/N" # replace N with your account index
+export MARKET=0x20db6336fa557dab4d29e3d6c3eaca63d99911b8d9106c4642c165b054ce4f03
+node src/cli.ts quote --loan wsteth --market "$MARKET"
+node src/cli.ts migrate --loan wsteth --market "$MARKET" --maturity 2026-12-25 --max-rate 4.77 --hd-path "$HD_PATH"
+node src/cli.ts cleanup --loan wsteth --market "$MARKET" --maturity 2026-12-25 --hd-path "$HD_PATH"
+node src/cli.ts status --loan wsteth --market "$MARKET"
+node src/cli.ts revoke --hd-path "$HD_PATH"
+```
+
+4.77 is an example maximum APR, not a guaranteed quote; 4.7608 rounds to 4.76 but exceeds an exact 4.76 cap.
+Keep ETH for gas and a small USDC balance (~5 USDC) for cleanup. Cleanup also supplies any wstETH already in the
+wallet, so inspect its confirmation amount. The wstETH approval transaction goes to
+`0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0`.
+
+Migration-only fork rehearsal (no Trezor, no mainnet writes):
+```sh
+LOAN=wsteth MARKET="$MARKET" SKIP_ROLL=1 npm run test:fork
+```
+
+A roll from this different-oracle market to a future market is not validated by this rehearsal. Arrange repayment
+or separately validate a renewal destination **before maturity**; post-maturity positions are liquidatable.

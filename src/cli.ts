@@ -52,6 +52,7 @@ Commands:
 
 Options:
   --loan          ${Object.keys(LOANS).join(" | ")}
+  --market        Exact destination market id (required for the reviewed wstETH oracle exception)
   --from          Your address (default: $ETH_FROM)
   --rpc-url       Ethereum RPC (default: $ETH_RPC_URL or ${DEFAULT_RPC})
   --signer        trezor (default) | unlocked (local anvil fork only)
@@ -63,6 +64,7 @@ const { positionals, values: opts } = parseArgs({
   allowPositionals: true,
   options: {
     loan: { type: "string" },
+    market: { type: "string" },
     maturity: { type: "string" },
     "from-maturity": { type: "string" },
     "max-rate": { type: "string" },
@@ -123,7 +125,7 @@ async function authorizations(client: PublicClient, user: Address) {
 }
 
 async function mirrorForMaturity(blueParams: Awaited<ReturnType<typeof readBlue>>["marketParams"], maturity: string) {
-  const all = await findMirrorMarkets(blueParams);
+  const all = await findMirrorMarkets(blueParams, opts.market as Hex | undefined);
   const matches = all.filter((c) => isoDate(c.market.maturity) === maturity);
   if (!matches.length) {
     const dates = [...new Set(all.map((c) => isoDate(c.market.maturity)))].join(", ");
@@ -155,13 +157,14 @@ async function status(client: PublicClient, user: Address) {
       `  Blue (variable):  debt ${usd(blue.debt)} USDC, collateral ${formatUnits(blue.collateral, loan.decimals, 8)} ${loan.symbol}, ` +
         `HF ${healthFactor(blue.collateral, p, blue.marketParams.lltv, blue.debt)}`,
     );
-    for (const c of await findMirrorMarkets(blue.marketParams)) {
+    for (const c of await findMirrorMarkets(blue.marketParams, opts.loan?.toLowerCase() === loan.symbol.toLowerCase() ? opts.market as Hex | undefined : undefined)) {
       const pos = await readMidnightPosition(client, c, user);
       if (pos.debt === 0n && pos.collateral === 0n && pos.credit === 0n) continue;
       const lltv = c.market.collateralParams[c.collateralIndex].lltv;
+      const midnightPrice = await oraclePrice(client, c.market.collateralParams[c.collateralIndex].oracle);
       console.log(
         `  Midnight ${isoDate(c.market.maturity)} (${daysLeft(c.market.maturity, now)}): owes ${usd(pos.debt)} USDC at maturity, collateral ` +
-          `${formatUnits(pos.collateral, loan.decimals, 8)} ${loan.symbol}, HF ${healthFactor(pos.collateral, p, lltv, pos.debt)}  (${c.id})`,
+          `${formatUnits(pos.collateral, loan.decimals, 8)} ${loan.symbol}, HF ${healthFactor(pos.collateral, midnightPrice, lltv, pos.debt)}  (${c.id})`,
       );
     }
   }
@@ -171,8 +174,8 @@ async function quote(client: PublicClient, user: Address) {
   const loan = loanArg();
   const blue = await readBlue(client, loan.blueMarketId, user);
   const size = blue.debt > 0n ? blue.debt : 10n ** 9n;
-  console.log(`${loan.symbol}/USDC fixed borrow quotes for ${usd(size)} USDC (oracle/LLTV identical to the Blue market):`);
-  for (const c of await findMirrorMarkets(blue.marketParams)) {
+  console.log(`${loan.symbol}/USDC fixed borrow quotes for ${usd(size)} USDC (same collateral/LLTV; explicit --market may use the reviewed oracle exception):`);
+  for (const c of await findMirrorMarkets(blue.marketParams, opts.market as Hex | undefined)) {
     const offers = c.bestBidTick === null ? [] : await quoteBorrow(c.id, size);
     if (!offers.length) {
       console.log(`  ${isoDate(c.market.maturity)}  no offers  (${c.id})`);
@@ -213,7 +216,8 @@ async function planMigration(client: PublicClient, user: Address, loan: LoanConf
   const existing = await readMidnightPosition(client, c, user);
   const params = c.market.collateralParams[c.collateralIndex];
   const price = await oraclePrice(client, params.oracle);
-  return { blue, best, sp, units, proceeds, apr, collateralMoved, existing, params, price };
+  const bluePrice = await oraclePrice(client, blue.marketParams.oracle);
+  return { blue, best, sp, units, proceeds, apr, collateralMoved, existing, params, price, bluePrice };
 }
 
 function printPlan(loan: LoanConfig, c: Candidate, p: Plan) {
@@ -230,6 +234,9 @@ Migration plan (${loan.symbol}/USDC)
   USDC borrowed:      ${usd(p.proceeds)} -> repays Blue debt
   Owed at maturity:   ${usd(p.units)} USDC (interest ${usd(p.units - p.proceeds)})
   Collateral moved:   ${formatUnits(p.collateralMoved, loan.decimals, 8)} ${loan.symbol}
+  Blue oracle:        ${p.blue.marketParams.oracle}, raw price ${p.bluePrice}
+  Midnight oracle:    ${p.params.oracle}, raw price ${p.price}
+  Oracle difference:  ${((Number(p.price) / Number(p.bluePrice) - 1) * 100).toFixed(3)}%${p.params.oracle.toLowerCase() !== p.blue.marketParams.oracle.toLowerCase() ? " (DIFFERENT ORACLE: USDC assumed $1; feed freshness not checked by oracle)" : ""}
   Callback fee:       0
   Midnight after:     debt ${usd(newDebt)}, collateral ${formatUnits(newColl, loan.decimals, 8)}, HF ${healthFactor(newColl, p.price, p.params.lltv, newDebt)}
   Left on Blue:       ~${usd(leftDebt)} USDC debt + interest, ${formatUnits(leftColl, loan.decimals, 8)} ${loan.symbol} (run "cleanup" after)

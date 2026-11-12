@@ -9,7 +9,8 @@ import {
   unitsForAssets,
   unitsForExactAssets,
 } from "../src/math.ts";
-import { marketFromApi, midnightMarketId } from "../src/morpho.ts";
+import { LOANS, WSTETH_BLUE_ORACLE, WSTETH_DESTINATION } from "../src/config.ts";
+import { marketFromApi, midnightMarketId, matchingCollateralIndex } from "../src/morpho.ts";
 
 // (tick, price) pairs taken from live Morpho API order books on 2026-11-03.
 const TICK_PRICES: [bigint, bigint][] = [
@@ -90,4 +91,18 @@ test("formatUnits / parseUnits", () => {
   assert.equal(formatUnits(123_456_780_000n, 6), "123,456.78");
   assert.equal(parseUnits("1,000.5", 6), 1_000_500_000n);
   assert.throws(() => parseUnits("1.1234567", 6));
+});
+
+test("wstETH oracle exception requires the exact explicit destination", () => {
+  const market = marketFromApi({"chain_id": 1, "midnight": "0x471686c42792f93528b000bef54bc10e3aa2045f", "loan_token": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "collaterals": [{"token": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0", "lltv": "860000000000000000", "liquidation_cursor": "300000000000000000", "oracle": "0xe087ad7fe989cf63f8383579d160a20ee7e69f9f"}, {"token": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "lltv": "980000000000000000", "liquidation_cursor": "300000000000000000", "oracle": "0x8d1a84515b54c58bac3b18315b6b1f17da5cf6ca"}], "maturity": 1798210800, "rcf_threshold": "300000000000", "enter_gate": "0x0000000000000000000000000000000000000000", "liquidator_gate": "0x0000000000000000000000000000000000000000"});
+  const blue = {loanToken: market.loanToken, collateralToken: market.collateralParams[0].token,
+    oracle: WSTETH_BLUE_ORACLE, irm: market.enterGate, lltv: 860000000000000000n};
+  assert.equal(LOANS.wsteth.decimals, 18);
+  assert.equal(midnightMarketId(market), WSTETH_DESTINATION);
+  assert.equal(matchingCollateralIndex(blue, market), -1);
+  assert.equal(matchingCollateralIndex(blue, market, WSTETH_DESTINATION), 0);
+  assert.equal(matchingCollateralIndex({...blue, lltv: 980000000000000000n}, market, WSTETH_DESTINATION), -1);
+  assert.equal(matchingCollateralIndex({...blue, oracle: market.enterGate}, market, WSTETH_DESTINATION), -1);
+  assert.equal(matchingCollateralIndex(blue, {...market, maturity: market.maturity + 1n}, WSTETH_DESTINATION), -1);
+  assert.equal(matchingCollateralIndex({...blue, oracle: market.collateralParams[0].oracle}, market), 0);
 });

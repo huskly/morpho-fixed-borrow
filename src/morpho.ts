@@ -8,7 +8,7 @@ import {
   type PublicClient,
 } from "viem";
 import { blueAbi, midnightAbi, oracleAbi } from "./abi.ts";
-import { CHAIN_ID, MIDNIGHT, MORPHO_API, MORPHO_BLUE, USDC } from "./config.ts";
+import { CHAIN_ID, MIDNIGHT, MORPHO_API, MORPHO_BLUE, USDC, WSTETH_DESTINATION, WSTETH_BLUE_ORACLE, WSTETH_MIDNIGHT_ORACLE } from "./config.ts";
 import { toAssetsUp } from "./math.ts";
 
 // ---------- Morpho Blue ----------
@@ -127,8 +127,22 @@ type ApiBook = ApiMarket & { market_id: string; midnight: string; bids: { tick: 
 export type Candidate = { id: Hex; market: MidnightMarket; collateralIndex: number; bestBidTick: bigint | null };
 
 // Midnight markets that mirror the given Blue market: same loan token, and a collateral slot with the same
-// token, LLTV and oracle. Markets with a different oracle exist and are priced very differently; they are ignored.
-export async function findMirrorMarkets(blue: BlueMarketParams): Promise<Candidate[]> {
+// token, LLTV and oracle by default. An explicit market id enables only the reviewed wstETH exception below.
+export function matchingCollateralIndex(blue: BlueMarketParams, market: MidnightMarket, explicitMarketId?: Hex): number {
+  const id = midnightMarketId(market);
+  if (explicitMarketId && id.toLowerCase() !== explicitMarketId.toLowerCase()) return -1;
+  if (market.loanToken !== getAddress(blue.loanToken)) return -1;
+  return market.collateralParams.findIndex((c) => {
+    if (c.token !== getAddress(blue.collateralToken) || c.lltv !== blue.lltv) return false;
+    if (c.oracle === getAddress(blue.oracle)) return true;
+    return explicitMarketId?.toLowerCase() === WSTETH_DESTINATION &&
+      id.toLowerCase() === WSTETH_DESTINATION &&
+      getAddress(blue.oracle) === getAddress(WSTETH_BLUE_ORACLE) &&
+      c.oracle === getAddress(WSTETH_MIDNIGHT_ORACLE);
+  });
+}
+
+export async function findMirrorMarkets(blue: BlueMarketParams, explicitMarketId?: Hex): Promise<Candidate[]> {
   const books: ApiBook[] = [];
   let cursor: string | undefined;
   do {
@@ -142,9 +156,7 @@ export async function findMirrorMarkets(blue: BlueMarketParams): Promise<Candida
   const out: Candidate[] = [];
   for (const book of books) {
     const market = marketFromApi(book);
-    const collateralIndex = market.collateralParams.findIndex(
-      (c) => c.token === getAddress(blue.collateralToken) && c.lltv === blue.lltv && c.oracle === getAddress(blue.oracle),
-    );
+    const collateralIndex = matchingCollateralIndex(blue, market, explicitMarketId);
     if (collateralIndex < 0 || market.loanToken !== getAddress(blue.loanToken)) continue;
     const id = midnightMarketId(market);
     if (id.toLowerCase() !== book.market_id.toLowerCase()) {
