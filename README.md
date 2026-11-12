@@ -15,10 +15,10 @@ callback as the taker callback. Within one transaction the callback receives the
 and moves the collateral to the new Midnight market. Midnight checks the position's health at the end, and the
 whole transaction reverts if anything fails. No Tenor frontend is involved, and the callback fee is set to 0.
 
-| Step | Tenor callback (Ethereum) | Authorizations it needs |
-|---|---|---|
-| `migrate`: Blue -> Midnight | `BorrowBlueToMidnightCallback` `0xbB91265Fd479094d7f1B1B20AF79A07442df9850` | Blue and Midnight |
-| `roll`: Midnight -> later Midnight | `BorrowMidnightRenewalCallback` `0xAbae3A858f53C7010D07ee930b3a0621adcFBBA8` | Midnight |
+| Step                               | Tenor callback (Ethereum)                                                    | Authorizations it needs |
+| ---------------------------------- | ---------------------------------------------------------------------------- | ----------------------- |
+| `migrate`: Blue -> Midnight        | `BorrowBlueToMidnightCallback` `0xbB91265Fd479094d7f1B1B20AF79A07442df9850`  | Blue and Midnight       |
+| `roll`: Midnight -> later Midnight | `BorrowMidnightRenewalCallback` `0xAbae3A858f53C7010D07ee930b3a0621adcFBBA8` | Midnight                |
 
 At startup the CLI checks on-chain that both callbacks are wired to the Morpho Blue and Midnight addresses below.
 Tenor's address page also lists Base deployments, where the same addresses have **different** roles (for example
@@ -165,9 +165,24 @@ wallet, so inspect its confirmation amount. The wstETH approval transaction goes
 `0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0`.
 
 Migration-only fork rehearsal (no Trezor, no mainnet writes):
+
 ```sh
 LOAN=wsteth MARKET="$MARKET" SKIP_ROLL=1 npm run test:fork
 ```
 
 A roll from this different-oracle market to a future market is not validated by this rehearsal. Arrange repayment
 or separately validate a renewal destination **before maturity**; post-maturity positions are liquidatable.
+
+## Local CI checks
+
+GitHub Actions runs on pushes and pull requests with Node 24. Run the same offline checks locally:
+
+```sh
+npm ci
+npm run lint
+npm run format:check
+npm run typecheck
+npm test
+```
+
+Use `npm run format` to apply formatting. CI does not require wallet details, RPC credentials, Foundry, or a Trezor; mainnet-fork rehearsals remain manual.

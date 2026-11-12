@@ -25,9 +25,13 @@ function wExp(x: bigint): bigint {
 }
 
 export function tickToPrice(tick: bigint): bigint {
-  if (tick < 0n || tick > MAX_TICK) throw new Error(`tick out of range: ${tick}`);
+  if (tick < 0n || tick > MAX_TICK)
+    throw new Error(`tick out of range: ${tick}`);
   const denom = WAD + wExp(LN_ONE_PLUS_DELTA * (MAX_TICK / 2n - tick));
-  return divHalfDown(divHalfDown(10n ** 36n, denom), PRICE_ROUNDING_STEP) * PRICE_ROUNDING_STEP;
+  return (
+    divHalfDown(divHalfDown(10n ** 36n, denom), PRICE_ROUNDING_STEP) *
+    PRICE_ROUNDING_STEP
+  );
 }
 
 // Simple annual rate (APR) implied by buying/selling a unit at `price` with `ttm` seconds to maturity.
@@ -42,23 +46,37 @@ export function unitsForAssets(assets: bigint, sellerPrice: bigint): bigint {
 
 // Smallest number of units whose sale proceeds are exactly `assets`. Exists whenever sellerPrice <= 1 (WAD): each
 // extra unit adds at most 1 to the rounded-down proceeds.
-export function unitsForExactAssets(assets: bigint, sellerPrice: bigint): bigint {
+export function unitsForExactAssets(
+  assets: bigint,
+  sellerPrice: bigint,
+): bigint {
   return (assets * WAD + sellerPrice - 1n) / sellerPrice;
 }
 
-export function sellerAssetsForUnits(units: bigint, sellerPrice: bigint): bigint {
+export function sellerAssetsForUnits(
+  units: bigint,
+  sellerPrice: bigint,
+): bigint {
   return (units * sellerPrice) / WAD;
 }
 
 // Morpho Blue SharesMathLib.toAssetsUp.
-export function toAssetsUp(shares: bigint, totalAssets: bigint, totalShares: bigint): bigint {
+export function toAssetsUp(
+  shares: bigint,
+  totalAssets: bigint,
+  totalShares: bigint,
+): bigint {
   const num = shares * (totalAssets + 1n);
   const den = totalShares + 10n ** 6n;
   return (num + den - 1n) / den;
 }
 
 // Max borrowable against `collateral` at an oracle `price` (1e36 scale) and `lltv` (WAD).
-export function maxDebt(collateral: bigint, price: bigint, lltv: bigint): bigint {
+export function maxDebt(
+  collateral: bigint,
+  price: bigint,
+  lltv: bigint,
+): bigint {
   return (((collateral * price) / ORACLE_PRICE_SCALE) * lltv) / WAD;
 }
 
@@ -74,6 +92,7 @@ export function formatUnits(x: bigint, decimals: number, digits = 2): string {
 
 export function parseUnits(s: string, decimals: number): bigint {
   const [int, frac = ""] = s.replaceAll(",", "").split(".");
-  if (!/^\d+$/.test(int) || !/^\d*$/.test(frac) || frac.length > decimals) throw new Error(`bad amount: ${s}`);
+  if (!/^\d+$/.test(int) || !/^\d*$/.test(frac) || frac.length > decimals)
+    throw new Error(`bad amount: ${s}`);
   return BigInt(int + frac.padEnd(decimals, "0"));
 }

@@ -8,7 +8,16 @@ import {
   type PublicClient,
 } from "viem";
 import { blueAbi, midnightAbi, oracleAbi } from "./abi.ts";
-import { CHAIN_ID, MIDNIGHT, MORPHO_API, MORPHO_BLUE, USDC, WSTETH_DESTINATION, WSTETH_BLUE_ORACLE, WSTETH_MIDNIGHT_ORACLE } from "./config.ts";
+import {
+  CHAIN_ID,
+  MIDNIGHT,
+  MORPHO_API,
+  MORPHO_BLUE,
+  USDC,
+  WSTETH_DESTINATION,
+  WSTETH_BLUE_ORACLE,
+  WSTETH_MIDNIGHT_ORACLE,
+} from "./config.ts";
 import { toAssetsUp } from "./math.ts";
 
 // ---------- Morpho Blue ----------
@@ -21,11 +30,30 @@ export type BlueMarketParams = {
   lltv: bigint;
 };
 
-export async function readBlue(client: PublicClient, marketId: Hex, user: Address) {
+export async function readBlue(
+  client: PublicClient,
+  marketId: Hex,
+  user: Address,
+) {
   const [params, position, market] = await Promise.all([
-    client.readContract({ address: MORPHO_BLUE, abi: blueAbi, functionName: "idToMarketParams", args: [marketId] }),
-    client.readContract({ address: MORPHO_BLUE, abi: blueAbi, functionName: "position", args: [marketId, user] }),
-    client.readContract({ address: MORPHO_BLUE, abi: blueAbi, functionName: "market", args: [marketId] }),
+    client.readContract({
+      address: MORPHO_BLUE,
+      abi: blueAbi,
+      functionName: "idToMarketParams",
+      args: [marketId],
+    }),
+    client.readContract({
+      address: MORPHO_BLUE,
+      abi: blueAbi,
+      functionName: "position",
+      args: [marketId, user],
+    }),
+    client.readContract({
+      address: MORPHO_BLUE,
+      abi: blueAbi,
+      functionName: "market",
+      args: [marketId],
+    }),
   ]);
   const [loanToken, collateralToken, oracle, irm, lltv] = params;
   const [, borrowShares, collateral] = position;
@@ -33,13 +61,24 @@ export async function readBlue(client: PublicClient, marketId: Hex, user: Addres
   // Uses the last stored totals, so this slightly UNDER-estimates the live debt (interest accrues every block).
   // That is the safe direction for sizing a migration: the callback reverts if it would over-repay.
   const debt = toAssetsUp(borrowShares, totalBorrowAssets, totalBorrowShares);
-  const marketParams: BlueMarketParams = { loanToken, collateralToken, oracle, irm, lltv };
+  const marketParams: BlueMarketParams = {
+    loanToken,
+    collateralToken,
+    oracle,
+    irm,
+    lltv,
+  };
   return { marketParams, borrowShares, collateral, debt };
 }
 
 // ---------- Midnight ----------
 
-export type CollateralParams = { token: Address; lltv: bigint; liquidationCursor: bigint; oracle: Address };
+export type CollateralParams = {
+  token: Address;
+  lltv: bigint;
+  liquidationCursor: bigint;
+  oracle: Address;
+};
 export type MidnightMarket = {
   chainId: bigint;
   midnight: Address;
@@ -81,15 +120,27 @@ const SSTORE2_PREFIX = "0x600b380380600b5f395ff3";
 // IdLib.toId
 export function midnightMarketId(market: MidnightMarket): Hex {
   const encoded = encodeAbiParameters(marketAbiParams, [market]);
-  const codeHash = keccak256(encodePacked(["bytes", "bytes"], [SSTORE2_PREFIX, encoded]));
-  return keccak256(encodePacked(["uint8", "address", "uint256", "bytes32"], [0xff, market.midnight, 0n, codeHash]));
+  const codeHash = keccak256(
+    encodePacked(["bytes", "bytes"], [SSTORE2_PREFIX, encoded]),
+  );
+  return keccak256(
+    encodePacked(
+      ["uint8", "address", "uint256", "bytes32"],
+      [0xff, market.midnight, 0n, codeHash],
+    ),
+  );
 }
 
 type ApiMarket = {
   chain_id: number;
   midnight: string;
   loan_token: string;
-  collaterals: { token: string; lltv: string; liquidation_cursor: string; oracle: string }[];
+  collaterals: {
+    token: string;
+    lltv: string;
+    liquidation_cursor: string;
+    oracle: string;
+  }[];
   maturity: number;
   rcf_threshold: string;
   enter_gate: string;
@@ -114,41 +165,75 @@ export function marketFromApi(m: ApiMarket): MidnightMarket {
   };
 }
 
-async function api<T>(path: string, params: Record<string, string>): Promise<T> {
+async function api<T>(
+  path: string,
+  params: Record<string, string>,
+): Promise<T> {
   const url = `${MORPHO_API}${path}?${new URLSearchParams(params)}`;
   const res = await fetch(url);
   const body = (await res.json()) as T & { error?: unknown };
-  if (!res.ok) throw new Error(`Morpho API ${res.status} for ${url}: ${JSON.stringify(body.error ?? body)}`);
+  if (!res.ok)
+    throw new Error(
+      `Morpho API ${res.status} for ${url}: ${JSON.stringify(body.error ?? body)}`,
+    );
   return body;
 }
 
-type ApiBook = ApiMarket & { market_id: string; midnight: string; bids: { tick: number; price: string; assets: string }[] };
+type ApiBook = ApiMarket & {
+  market_id: string;
+  midnight: string;
+  bids: { tick: number; price: string; assets: string }[];
+};
 
-export type Candidate = { id: Hex; market: MidnightMarket; collateralIndex: number; bestBidTick: bigint | null };
+export type Candidate = {
+  id: Hex;
+  market: MidnightMarket;
+  collateralIndex: number;
+  bestBidTick: bigint | null;
+};
 
 // Midnight markets that mirror the given Blue market: same loan token, and a collateral slot with the same
 // token, LLTV and oracle by default. An explicit market id enables only the reviewed wstETH exception below.
-export function matchingCollateralIndex(blue: BlueMarketParams, market: MidnightMarket, explicitMarketId?: Hex): number {
+export function matchingCollateralIndex(
+  blue: BlueMarketParams,
+  market: MidnightMarket,
+  explicitMarketId?: Hex,
+): number {
   const id = midnightMarketId(market);
-  if (explicitMarketId && id.toLowerCase() !== explicitMarketId.toLowerCase()) return -1;
+  if (explicitMarketId && id.toLowerCase() !== explicitMarketId.toLowerCase())
+    return -1;
   if (market.loanToken !== getAddress(blue.loanToken)) return -1;
   return market.collateralParams.findIndex((c) => {
-    if (c.token !== getAddress(blue.collateralToken) || c.lltv !== blue.lltv) return false;
+    if (c.token !== getAddress(blue.collateralToken) || c.lltv !== blue.lltv)
+      return false;
     if (c.oracle === getAddress(blue.oracle)) return true;
-    return explicitMarketId?.toLowerCase() === WSTETH_DESTINATION &&
+    return (
+      explicitMarketId?.toLowerCase() === WSTETH_DESTINATION &&
       id.toLowerCase() === WSTETH_DESTINATION &&
       getAddress(blue.oracle) === getAddress(WSTETH_BLUE_ORACLE) &&
-      c.oracle === getAddress(WSTETH_MIDNIGHT_ORACLE);
+      c.oracle === getAddress(WSTETH_MIDNIGHT_ORACLE)
+    );
   });
 }
 
-export async function findMirrorMarkets(blue: BlueMarketParams, explicitMarketId?: Hex): Promise<Candidate[]> {
+export async function findMirrorMarkets(
+  blue: BlueMarketParams,
+  explicitMarketId?: Hex,
+): Promise<Candidate[]> {
   const books: ApiBook[] = [];
   let cursor: string | undefined;
   do {
-    const params: Record<string, string> = { chain_ids: String(CHAIN_ID), loan_tokens: USDC, sort: "maturity", limit: "20" };
+    const params: Record<string, string> = {
+      chain_ids: String(CHAIN_ID),
+      loan_tokens: USDC,
+      sort: "maturity",
+      limit: "20",
+    };
     if (cursor) params.cursor = cursor;
-    const page = await api<{ data: ApiBook[]; cursor?: string }>("/v0/midnight/books", params);
+    const page = await api<{ data: ApiBook[]; cursor?: string }>(
+      "/v0/midnight/books",
+      params,
+    );
     books.push(...page.data);
     cursor = page.data.length ? page.cursor : undefined;
   } while (cursor);
@@ -156,16 +241,33 @@ export async function findMirrorMarkets(blue: BlueMarketParams, explicitMarketId
   const out: Candidate[] = [];
   for (const book of books) {
     const market = marketFromApi(book);
-    const collateralIndex = matchingCollateralIndex(blue, market, explicitMarketId);
-    if (collateralIndex < 0 || market.loanToken !== getAddress(blue.loanToken)) continue;
+    const collateralIndex = matchingCollateralIndex(
+      blue,
+      market,
+      explicitMarketId,
+    );
+    if (collateralIndex < 0 || market.loanToken !== getAddress(blue.loanToken))
+      continue;
     const id = midnightMarketId(market);
     if (id.toLowerCase() !== book.market_id.toLowerCase()) {
-      throw new Error(`market id mismatch for ${book.market_id}: API market struct hashes to ${id}`);
+      throw new Error(
+        `market id mismatch for ${book.market_id}: API market struct hashes to ${id}`,
+      );
     }
-    if (market.midnight !== getAddress(MIDNIGHT) || market.chainId !== CHAIN_ID) {
-      throw new Error(`market ${id} is not on the expected Midnight deployment`);
+    if (
+      market.midnight !== getAddress(MIDNIGHT) ||
+      market.chainId !== CHAIN_ID
+    ) {
+      throw new Error(
+        `market ${id} is not on the expected Midnight deployment`,
+      );
     }
-    out.push({ id, market, collateralIndex, bestBidTick: book.bids.length ? BigInt(book.bids[0].tick) : null });
+    out.push({
+      id,
+      market,
+      collateralIndex,
+      bestBidTick: book.bids.length ? BigInt(book.bids[0].tick) : null,
+    });
   }
   return out;
 }
@@ -188,7 +290,12 @@ export type Offer = {
   continuousFeeCap: bigint;
 };
 
-export type TakeableOffer = { offer: Offer; ratifierData: Hex; units: bigint; validUntil: number };
+export type TakeableOffer = {
+  offer: Offer;
+  ratifierData: Hex;
+  units: bigint;
+  validUntil: number;
+};
 
 type ApiTakeable = {
   units: string;
@@ -215,12 +322,18 @@ type ApiTakeable = {
 };
 
 // Best lender (bid) offers for borrowing `assets` of the loan token in market `id`.
-export async function quoteBorrow(id: Hex, assets: bigint): Promise<TakeableOffer[]> {
-  const res = await api<{ data: { takeable_offers: ApiTakeable[] } }>(`/v0/midnight/books/${id}/bids/quote`, {
-    assets: assets.toString(),
-    slippage: "0.1", // only affects how many fallback offers are returned; we take the best offer at its own tick
-    limit: "5",
-  });
+export async function quoteBorrow(
+  id: Hex,
+  assets: bigint,
+): Promise<TakeableOffer[]> {
+  const res = await api<{ data: { takeable_offers: ApiTakeable[] } }>(
+    `/v0/midnight/books/${id}/bids/quote`,
+    {
+      assets: assets.toString(),
+      slippage: "0.1", // only affects how many fallback offers are returned; we take the best offer at its own tick
+      limit: "5",
+    },
+  );
   return res.data.takeable_offers.map((t) => {
     const o = t.offer;
     const offer: Offer = {
@@ -240,16 +353,35 @@ export async function quoteBorrow(id: Hex, assets: bigint): Promise<TakeableOffe
       maxAssets: BigInt(o.max_assets),
       continuousFeeCap: BigInt(o.continuous_fee_cap),
     };
-    if (midnightMarketId(offer.market).toLowerCase() !== id.toLowerCase() || !offer.buy) {
-      throw new Error(`API returned an offer that is not a bid on market ${id}`);
+    if (
+      midnightMarketId(offer.market).toLowerCase() !== id.toLowerCase() ||
+      !offer.buy
+    ) {
+      throw new Error(
+        `API returned an offer that is not a bid on market ${id}`,
+      );
     }
-    return { offer, ratifierData: t.ratifier_data, units: BigInt(t.units), validUntil: t.valid_until };
+    return {
+      offer,
+      ratifierData: t.ratifier_data,
+      units: BigInt(t.units),
+      validUntil: t.valid_until,
+    };
   });
 }
 
-export async function readMidnightPosition(client: PublicClient, c: Candidate, user: Address) {
+export async function readMidnightPosition(
+  client: PublicClient,
+  c: Candidate,
+  user: Address,
+) {
   const [position, collateral] = await Promise.all([
-    client.readContract({ address: MIDNIGHT, abi: midnightAbi, functionName: "position", args: [c.id, user] }),
+    client.readContract({
+      address: MIDNIGHT,
+      abi: midnightAbi,
+      functionName: "position",
+      args: [c.id, user],
+    }),
     client.readContract({
       address: MIDNIGHT,
       abi: midnightAbi,
@@ -261,14 +393,33 @@ export async function readMidnightPosition(client: PublicClient, c: Candidate, u
   return { credit, debt, collateral };
 }
 
-export async function oraclePrice(client: PublicClient, oracle: Address): Promise<bigint> {
-  return client.readContract({ address: oracle, abi: oracleAbi, functionName: "price" });
+export async function oraclePrice(
+  client: PublicClient,
+  oracle: Address,
+): Promise<bigint> {
+  return client.readContract({
+    address: oracle,
+    abi: oracleAbi,
+    functionName: "price",
+  });
 }
 
 // Price per unit the borrower receives, as computed in Midnight.take for a bid: tick price minus settlement fee.
-export async function sellerPrice(client: PublicClient, c: Candidate, tickPrice: bigint) {
+export async function sellerPrice(
+  client: PublicClient,
+  c: Candidate,
+  tickPrice: bigint,
+) {
   const block = await client.getBlock();
-  const ttm = c.market.maturity > block.timestamp ? c.market.maturity - block.timestamp : 0n;
-  const fee = await client.readContract({ address: MIDNIGHT, abi: midnightAbi, functionName: "settlementFee", args: [c.id, ttm] });
+  const ttm =
+    c.market.maturity > block.timestamp
+      ? c.market.maturity - block.timestamp
+      : 0n;
+  const fee = await client.readContract({
+    address: MIDNIGHT,
+    abi: midnightAbi,
+    functionName: "settlementFee",
+    args: [c.id, ttm],
+  });
   return { price: tickPrice - fee, settlementFee: fee, ttm };
 }

@@ -2,19 +2,30 @@
   "name": "morpho-fixed-borrow",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.18" },
-  "bin": { "morpho-fixed-borrow": "src/cli.ts" },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "bin": {
+    "morpho-fixed-borrow": "src/cli.ts"
+  },
   "scripts": {
     "cli": "node src/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/unit.test.ts",
-    "test:fork": "node --test --test-concurrency=1 test/fork.test.ts"
+    "test:fork": "node --test --test-concurrency=1 test/fork.test.ts",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "viem": "^2.57.15"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^24.0.0",
-    "typescript": "^5.9.0"
+    "eslint": "^10.14.0",
+    "prettier": "^3.10.1",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.72.2"
   }
 }
