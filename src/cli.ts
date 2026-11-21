@@ -13,6 +13,7 @@ import {
   type PublicClient,
 } from "viem";
 import { blueAbi, callbackAbi, erc20Abi, midnightAbi } from "./abi.ts";
+import { advise, type Target } from "./advise.ts";
 import {
   CALLBACK,
   CHAIN_ID,
@@ -22,6 +23,7 @@ import {
   MORPHO_BLUE,
   RENEWAL_CALLBACK,
   USDC,
+  WSTETH_DESTINATION,
   type LoanConfig,
 } from "./config.ts";
 import {
@@ -35,6 +37,7 @@ import {
   unitsForExactAssets,
 } from "./math.ts";
 import {
+  blueBorrowApy,
   findMirrorMarkets,
   marketAbiParams,
   oraclePrice,
@@ -43,6 +46,7 @@ import {
   readMidnightPosition,
   sellerPrice,
   type Candidate,
+  type RateWindow,
   type TakeableOffer,
 } from "./morpho.ts";
 import { checkSigner, confirm, send, type Sender } from "./send.ts";
@@ -58,10 +62,13 @@ Commands:
                                Repay leftover Blue debt from your USDC and move leftover collateral
   roll     --loan L --from-maturity YYYY-MM-DD --maturity YYYY-MM-DD --max-rate PCT [--amount USDC]
                                Roll the Midnight loan into a later maturity in one take()
+  advise   [--loan L] [--ref 7d|1m] [--max-rate PCT]
+                               Whether to roll each Midnight loan now or wait, and into which maturity
   revoke                       Remove the callbacks' authorizations on Blue and Midnight
 
 Options:
   --loan          ${Object.keys(LOANS).join(" | ")}
+  --ref           Blue borrow rate average used as the reference by advise: 7d (default) | 1m
   --market        Exact destination market id (required for the reviewed wstETH oracle exception)
   --from          Your address (default: $ETH_FROM)
   --rpc-url       Ethereum RPC (default: $ETH_RPC_URL or ${DEFAULT_RPC})
@@ -80,6 +87,7 @@ const { positionals, values: opts } = parseArgs({
     "max-rate": { type: "string" },
     amount: { type: "string" },
     buffer: { type: "string", default: "1" },
+    ref: { type: "string", default: "7d" },
     from: { type: "string" },
     "rpc-url": { type: "string" },
     signer: { type: "string", default: "trezor" },
@@ -804,6 +812,105 @@ async function roll(client: PublicClient, sender: Sender) {
   await status(client, user);
 }
 
+async function adviseRolls(client: PublicClient, user: Address) {
+  if (opts.ref !== "7d" && opts.ref !== "1m")
+    throw new Error("--ref must be 7d or 1m");
+  const window: RateWindow = opts.ref;
+  const maxRate = opts["max-rate"] ? Number(opts["max-rate"]) / 100 : undefined;
+  const loans = opts.loan ? [loanArg()] : Object.values(LOANS);
+  const now = (await client.getBlock()).timestamp;
+  for (const loan of loans) {
+    const blue = await readBlue(client, loan.blueMarketId, user);
+    // Targets follow the default oracle rule. The reviewed wstETH market is only read as a source.
+    const [mirrors, reviewed, refApy] = await Promise.all([
+      findMirrorMarkets(blue.marketParams),
+      findMirrorMarkets(blue.marketParams, WSTETH_DESTINATION),
+      blueBorrowApy(loan.blueMarketId, window),
+    ]);
+    const markets = [
+      ...mirrors,
+      ...reviewed.filter((r) => !mirrors.some((m) => m.id === r.id)),
+    ];
+    const positions = await Promise.all(
+      markets.map((c) => readMidnightPosition(client, c, user)),
+    );
+    const sources = markets
+      .map((c, i) => ({ c, debt: positions[i].debt }))
+      .filter((s) => s.debt > 0n);
+    console.log(
+      `\n${loan.symbol}/USDC  reference: Blue ${window} average borrow rate ${pct(refApy)} APY`,
+    );
+    if (!sources.length) console.log("  No Midnight debt to roll.");
+
+    for (const { c: source, debt } of sources) {
+      const days = Number(source.market.maturity - now) / 86400;
+      const targets: (Target & { id: Hex })[] = [];
+      for (const c of mirrors) {
+        if (
+          c.market.maturity <= source.market.maturity ||
+          c.bestBidTick === null
+        )
+          continue;
+        const offers = await quoteBorrow(c.id, debt, 20);
+        if (!offers.length) continue;
+        const best = offers[0];
+        const sp = await sellerPrice(client, c, tickToPrice(best.offer.tick));
+        targets.push({
+          id: c.id,
+          maturity: c.market.maturity,
+          apr: priceToApr(sp.price, sp.ttm),
+          termDays: Number(sp.ttm) / 86400,
+          coverage:
+            Number(sellerAssetsForUnits(best.units, sp.price)) / Number(debt),
+          lenders: new Set(offers.map((o) => o.offer.maker)).size,
+          offerExpiryDays: Number(best.offer.expiry - now) / 86400,
+        });
+      }
+      const a = advise({ daysLeft: days, refApy, targets, maxRate });
+
+      console.log(
+        `\n  Midnight ${isoDate(source.market.maturity)}: owes ${usd(debt)} USDC, ${daysLeft(source.market.maturity, now)}`,
+      );
+      console.log(
+        "    Target      APR     Term    Blue ref  Roll now vs wait  Break-even rise  Coverage  Lenders",
+      );
+      for (const t of a.evaluated) {
+        const gain = usd(BigInt(Math.round(t.benefit * Number(debt))));
+        console.log(
+          `    ${isoDate(t.maturity)}  ${pct(t.apr).padStart(6)}  ${t.termDays.toFixed(1).padStart(5)}d  ${pct(t.refApr).padStart(8)}  ` +
+            `${(gain.startsWith("-") ? gain : "+" + gain).padStart(12)} USDC  ${("+" + pct(t.breakEvenRise)).padStart(15)}  ` +
+            `${t.coverage.toFixed(2).padStart(7)}x  ${String(t.lenders).padStart(7)}`,
+        );
+      }
+      if (!a.evaluated.length)
+        console.log("    (no later maturity has offers)");
+      console.log(
+        `\n  Advice: ${a.action.toUpperCase()}: ${a.reasons.join("; ")}`,
+      );
+      if (!a.target) continue;
+      const t = a.target;
+      const perDay = usd(BigInt(Math.round((t.apr / 365) * Number(debt))));
+      console.log(
+        `    Best target ${isoDate(t.maturity)} at ${pct(t.apr)}. Each day of waiting saves ~${perDay} USDC; ` +
+          `waiting pays off unless rates rise more than ${pct(t.breakEvenRise)} by maturity.`,
+      );
+      for (const w of t.warnings)
+        console.log(`    Warning: ${w}; liquidity can disappear quickly.`);
+      if (a.action === "roll" && !mirrors.some((m) => m.id === source.id)) {
+        console.log(
+          "    roll does not support rolling out of the reviewed wstETH market yet.",
+        );
+      } else if (a.action === "roll") {
+        const suggestedMax = (Math.ceil(t.apr * 1000 + 1) / 10).toFixed(1);
+        console.log(
+          `    node src/cli.ts roll --loan ${Object.keys(LOANS).find((k) => LOANS[k] === loan)} ` +
+            `--from-maturity ${isoDate(source.market.maturity)} --maturity ${isoDate(t.maturity)} --max-rate ${suggestedMax}`,
+        );
+      }
+    }
+  }
+}
+
 async function revoke(client: PublicClient, sender: Sender) {
   const user = sender.from;
   const auth = await authorizations(client, user);
@@ -898,6 +1005,8 @@ async function main() {
       return cleanup(client, sender);
     case "roll":
       return roll(client, sender);
+    case "advise":
+      return adviseRolls(client, sender.from);
     case "revoke":
       return revoke(client, sender);
     default:

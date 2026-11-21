@@ -52,6 +52,7 @@ node src/cli.ts quote   --loan wbtc                      # fixed rates for every
 node src/cli.ts migrate --loan wbtc --maturity 2026-12-25 --max-rate 4.5     # optionally --amount 50000
 node src/cli.ts cleanup --loan wbtc --maturity 2026-12-25
 node src/cli.ts roll    --loan wbtc --from-maturity 2026-12-25 --maturity 2027-03-26 --max-rate 6
+node src/cli.ts advise                                   # roll now or wait, and into which maturity
 node src/cli.ts revoke
 ```
 
@@ -91,6 +92,32 @@ rest.
 
 If Midnight's settlement fee for USDC becomes non-zero (it is 0 today), the proceeds can change by one unit between
 simulation and mining. The take then reverts with `ExcessRepayment` (only gas is lost); re-run `roll`.
+
+### advise
+
+Read-only. For each Midnight loan (all loans, or `--loan`), says whether to roll now or wait, and into which maturity:
+
+```sh
+node src/cli.ts advise                     # reference: Blue 7-day average borrow rate
+node src/cli.ts advise --loan wbtc --ref 1m --max-rate 6
+```
+
+Rolling `d` days early costs those `d` days at the new rate. The Blue variable rate (7D or 1M average, `--ref`)
+stands in for the rate available if you wait until maturity. For every later maturity with offers it shows the fixed
+APR, the reference, how much rolling now saves (negative = costs) versus rolling at maturity at the reference rate,
+the rate rise that would make waiting a loss, how many times the best single offer covers the debt, and the number
+of lenders quoting. Then it checks, in order:
+
+1. Matured, or no offer can take the whole debt (under `--max-rate`, if given): **ALERT**.
+2. 3 days or less left: **ROLL** into the best target, even above the reference.
+3. Liquidity is thin for the best target at or below the reference (any rate with `--max-rate`): best offer covers less
+   than 1.5x the debt, or the best offer expires before maturity: **ROLL**.
+4. Rolling now saves money versus waiting at the reference rate: **ROLL**.
+5. Otherwise **WAIT**.
+
+For wstETH it reads the position in the reviewed market `0x20db…4f03`, but only suggests targets that pass the
+default oracle rule. The best target is the one where rolling now saves the most. For a ROLL it prints the matching `roll` command.
+Fewer than 2 lenders quoting only prints a warning: today a single lender often provides all offers.
 
 ### revoke
 

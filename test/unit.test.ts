@@ -19,6 +19,13 @@ import {
   midnightMarketId,
   matchingCollateralIndex,
 } from "../src/morpho.ts";
+import {
+  advise,
+  apyToSimpleApr,
+  DEFAULT_THRESHOLDS,
+  evaluate,
+  type Target,
+} from "../src/advise.ts";
 
 // (tick, price) pairs taken from live Morpho API order books on 2026-11-03.
 const TICK_PRICES: [bigint, bigint][] = [
@@ -188,5 +195,131 @@ test("wstETH oracle exception requires the exact explicit destination", () => {
       market,
     ),
     0,
+  );
+});
+
+// ---------- roll advice ----------
+
+const tgt = (over: Partial<Target> = {}): Target => ({
+  maturity: 1n,
+  apr: 0.05,
+  termDays: 90,
+  coverage: 10,
+  lenders: 3,
+  offerExpiryDays: 365,
+  ...over,
+});
+
+test("apyToSimpleApr matches compounding over the period", () => {
+  assert.ok(Math.abs(apyToSimpleApr(0.05, 1) - 0.05) < 1e-12);
+  assert.ok(apyToSimpleApr(0.05, 0.25) < 0.05);
+  assert.ok(Math.abs(apyToSimpleApr(0.05, 0) - Math.log1p(0.05)) < 1e-12);
+});
+
+test("evaluate: benefit and break-even rise", () => {
+  const e = evaluate(
+    tgt({ apr: 0.05, termDays: 90 }),
+    30,
+    0.05,
+    DEFAULT_THRESHOLDS,
+  );
+  // Rolling 30 days early at the reference rate costs ~30 days of interest.
+  assert.ok(Math.abs(e.benefit - (e.refApr * 60 - 0.05 * 90) / 365) < 1e-12);
+  assert.ok(e.benefit < 0);
+  assert.ok(Math.abs(e.breakEvenRise - 0.025) < 1e-12); // 5% x 30 / 60
+});
+
+test("advise: waits when rolling early costs more and liquidity is fine", () => {
+  const a = advise({ daysLeft: 30, refApy: 0.05, targets: [tgt()] });
+  assert.equal(a.action, "wait");
+});
+
+test("advise: rolls when the fixed rate is far enough below the reference", () => {
+  const a = advise({
+    daysLeft: 30,
+    refApy: 0.08,
+    targets: [tgt({ apr: 0.045 })],
+  });
+  assert.equal(a.action, "roll");
+  assert.match(a.reasons[0], /^rate/);
+});
+
+test("advise: rolls at the deadline even above the reference", () => {
+  const a = advise({
+    daysLeft: 2,
+    refApy: 0.03,
+    targets: [tgt({ apr: 0.06 })],
+  });
+  assert.equal(a.action, "roll");
+  assert.match(a.reasons[0], /deadline/);
+});
+
+test("advise: rolls early on thin liquidity when the rate is acceptable", () => {
+  for (const over of [{ coverage: 1.2 }, { offerExpiryDays: 10 }]) {
+    const a = advise({
+      daysLeft: 30,
+      refApy: 0.05,
+      targets: [tgt({ apr: 0.045, ...over })],
+    });
+    assert.equal(a.action, "roll", JSON.stringify(over));
+    assert.match(a.reasons[0], /^liquidity/);
+  }
+  // Above the reference and without --max-rate, thin liquidity alone does not trigger a roll.
+  assert.equal(
+    advise({
+      daysLeft: 30,
+      refApy: 0.05,
+      targets: [tgt({ apr: 0.06, coverage: 1.2 })],
+    }).action,
+    "wait",
+  );
+});
+
+test("advise: a single lender is a warning, not a reason to roll", () => {
+  const a = advise({
+    daysLeft: 30,
+    refApy: 0.05,
+    targets: [tgt({ apr: 0.045, lenders: 1 })],
+  });
+  assert.equal(a.action, "wait");
+  assert.deepEqual(a.target!.warnings, ["1 lender quoting"]);
+});
+
+test("advise: picks the target with the largest benefit", () => {
+  const a = advise({
+    daysLeft: 20,
+    refApy: 0.07,
+    targets: [
+      tgt({ maturity: 1n, termDays: 60, apr: 0.05 }),
+      tgt({ maturity: 2n, termDays: 150, apr: 0.05 }),
+    ],
+  });
+  assert.equal(a.action, "roll");
+  assert.equal(a.target!.maturity, 2n);
+});
+
+test("advise: alerts when nothing can take the whole debt or the loan matured", () => {
+  assert.equal(
+    advise({ daysLeft: 10, refApy: 0.05, targets: [tgt({ coverage: 0.5 })] })
+      .action,
+    "alert",
+  );
+  assert.equal(
+    advise({
+      daysLeft: 10,
+      refApy: 0.05,
+      targets: [tgt({ apr: 0.07 })],
+      maxRate: 0.06,
+    }).action,
+    "alert",
+  );
+  assert.equal(
+    advise({ daysLeft: 0, refApy: 0.05, targets: [tgt()] }).action,
+    "alert",
+  );
+  assert.equal(
+    advise({ daysLeft: 10, refApy: 0.05, targets: [tgt({ termDays: 5 })] })
+      .action,
+    "alert",
   );
 });

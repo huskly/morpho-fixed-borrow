@@ -325,13 +325,14 @@ type ApiTakeable = {
 export async function quoteBorrow(
   id: Hex,
   assets: bigint,
+  limit = 5,
 ): Promise<TakeableOffer[]> {
   const res = await api<{ data: { takeable_offers: ApiTakeable[] } }>(
     `/v0/midnight/books/${id}/bids/quote`,
     {
       assets: assets.toString(),
       slippage: "0.1", // only affects how many fallback offers are returned; we take the best offer at its own tick
-      limit: "5",
+      limit: String(limit),
     },
   );
   return res.data.takeable_offers.map((t) => {
@@ -368,6 +369,33 @@ export async function quoteBorrow(
       validUntil: t.valid_until,
     };
   });
+}
+
+export type RateWindow = "7d" | "1m";
+
+// Average Blue variable borrow APY over the window, from the Morpho GraphQL API.
+export async function blueBorrowApy(
+  marketId: Hex,
+  window: RateWindow,
+): Promise<number> {
+  const field = window === "7d" ? "weeklyBorrowApy" : "monthlyBorrowApy";
+  const res = await fetch(`${MORPHO_API}/graphql`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      query: `{ marketById(marketId: "${marketId}", chainId: ${CHAIN_ID}) { state { ${field} } } }`,
+    }),
+  });
+  const body = (await res.json()) as {
+    data?: { marketById?: { state?: Record<string, number | null> } };
+    errors?: unknown;
+  };
+  const apy = body.data?.marketById?.state?.[field];
+  if (!res.ok || typeof apy !== "number")
+    throw new Error(
+      `Morpho GraphQL: no ${field} for ${marketId}: ${JSON.stringify(body.errors ?? body)}`,
+    );
+  return apy;
 }
 
 export async function readMidnightPosition(
