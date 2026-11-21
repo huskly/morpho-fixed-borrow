@@ -9,11 +9,7 @@ import {
   unitsForAssets,
   unitsForExactAssets,
 } from "../src/math.ts";
-import {
-  LOANS,
-  WSTETH_BLUE_ORACLE,
-  WSTETH_DESTINATION,
-} from "../src/config.ts";
+import { LOANS, WSTETH_BLUE_ORACLE } from "../src/config.ts";
 import {
   marketFromApi,
   midnightMarketId,
@@ -130,7 +126,7 @@ test("formatUnits / parseUnits", () => {
   assert.throws(() => parseUnits("1.1234567", 6));
 });
 
-test("wstETH oracle exception requires the exact explicit destination", () => {
+test("wstETH markets may use the reviewed Midnight oracle", () => {
   const market = marketFromApi({
     chain_id: 1,
     midnight: "0x471686c42792f93528b000bef54bc10e3aa2045f",
@@ -162,39 +158,40 @@ test("wstETH oracle exception requires the exact explicit destination", () => {
     lltv: 860000000000000000n,
   };
   assert.equal(LOANS.wsteth.decimals, 18);
-  assert.equal(midnightMarketId(market), WSTETH_DESTINATION);
-  assert.equal(matchingCollateralIndex(blue, market), -1);
-  assert.equal(matchingCollateralIndex(blue, market, WSTETH_DESTINATION), 0);
   assert.equal(
-    matchingCollateralIndex(
-      { ...blue, lltv: 980000000000000000n },
-      market,
-      WSTETH_DESTINATION,
-    ),
-    -1,
+    midnightMarketId(market),
+    "0x20db6336fa557dab4d29e3d6c3eaca63d99911b8d9106c4642c165b054ce4f03",
+  );
+  // The reviewed Midnight oracle is accepted at any maturity, with or without --market.
+  assert.equal(matchingCollateralIndex(blue, market), 0);
+  assert.equal(
+    matchingCollateralIndex(blue, {
+      ...market,
+      maturity: market.maturity + 1n,
+    }),
+    0,
   );
   assert.equal(
-    matchingCollateralIndex(
-      { ...blue, oracle: market.enterGate },
-      market,
-      WSTETH_DESTINATION,
-    ),
-    -1,
+    matchingCollateralIndex(blue, market, midnightMarketId(market)),
+    0,
   );
+  // --market selects only that market.
   assert.equal(
     matchingCollateralIndex(
       blue,
       { ...market, maturity: market.maturity + 1n },
-      WSTETH_DESTINATION,
+      midnightMarketId(market),
     ),
     -1,
   );
   assert.equal(
-    matchingCollateralIndex(
-      { ...blue, oracle: market.collateralParams[0].oracle },
-      market,
-    ),
-    0,
+    matchingCollateralIndex({ ...blue, lltv: 980000000000000000n }, market),
+    -1,
+  );
+  // Other Blue oracles still need an exact match.
+  assert.equal(
+    matchingCollateralIndex({ ...blue, oracle: market.enterGate }, market),
+    -1,
   );
 });
 

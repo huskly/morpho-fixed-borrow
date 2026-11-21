@@ -14,7 +14,6 @@ import {
   MORPHO_API,
   MORPHO_BLUE,
   USDC,
-  WSTETH_DESTINATION,
   WSTETH_BLUE_ORACLE,
   WSTETH_MIDNIGHT_ORACLE,
 } from "./config.ts";
@@ -193,27 +192,26 @@ export type Candidate = {
 };
 
 // Midnight markets that mirror the given Blue market: same loan token, and a collateral slot with the same
-// token, LLTV and oracle by default. An explicit market id enables only the reviewed wstETH exception below.
+// token, LLTV and oracle (or the reviewed wstETH Midnight oracle). An explicit market id selects only that market.
 export function matchingCollateralIndex(
   blue: BlueMarketParams,
   market: MidnightMarket,
   explicitMarketId?: Hex,
 ): number {
-  const id = midnightMarketId(market);
-  if (explicitMarketId && id.toLowerCase() !== explicitMarketId.toLowerCase())
+  if (
+    explicitMarketId &&
+    midnightMarketId(market).toLowerCase() !== explicitMarketId.toLowerCase()
+  )
     return -1;
   if (market.loanToken !== getAddress(blue.loanToken)) return -1;
-  return market.collateralParams.findIndex((c) => {
-    if (c.token !== getAddress(blue.collateralToken) || c.lltv !== blue.lltv)
-      return false;
-    if (c.oracle === getAddress(blue.oracle)) return true;
-    return (
-      explicitMarketId?.toLowerCase() === WSTETH_DESTINATION &&
-      id.toLowerCase() === WSTETH_DESTINATION &&
-      getAddress(blue.oracle) === getAddress(WSTETH_BLUE_ORACLE) &&
-      c.oracle === getAddress(WSTETH_MIDNIGHT_ORACLE)
-    );
-  });
+  return market.collateralParams.findIndex(
+    (c) =>
+      c.token === getAddress(blue.collateralToken) &&
+      c.lltv === blue.lltv &&
+      (c.oracle === getAddress(blue.oracle) ||
+        (getAddress(blue.oracle) === getAddress(WSTETH_BLUE_ORACLE) &&
+          c.oracle === getAddress(WSTETH_MIDNIGHT_ORACLE))),
+  );
 }
 
 export async function findMirrorMarkets(

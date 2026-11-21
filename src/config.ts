@@ -22,9 +22,8 @@ export type LoanConfig = {
   blueMarketId: Hex;
 };
 
-// Explicitly reviewed exception; never broaden oracle matching for other markets.
-export const WSTETH_DESTINATION: Hex =
-  "0x20db6336fa557dab4d29e3d6c3eaca63d99911b8d9106c4642c165b054ce4f03";
+// wstETH Midnight markets may use WSTETH_MIDNIGHT_ORACLE (reviewed in ORACLE-REVIEW.md) instead of the Blue
+// market's oracle. Every other market must use the Blue market's own oracle.
 export const WSTETH_BLUE_ORACLE: Address =
   "0x48F7E36EB6B826B2dF4B2E630B62Cd25e89E40e2";
 export const WSTETH_MIDNIGHT_ORACLE: Address =

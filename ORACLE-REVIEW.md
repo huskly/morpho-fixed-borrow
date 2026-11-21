@@ -2,6 +2,8 @@
 
 Destination market: `0x20db6336fa557dab4d29e3d6c3eaca63d99911b8d9106c4642c165b054ce4f03`.
 
+Since 2026-11-21 the tool accepts this oracle for every wstETH/USDC Midnight market (any maturity), not just this one.
+
 - [Verified oracle source](https://eth.blockscout.com/address/0xe087ad7fe989cf63f8383579d160a20ee7e69f9f?tab=contract): MorphoChainlinkOracleV2.
 - Base feed 1: `0x4F67e4d9BD67eFa28236013288737D39AeF48e79`.
   [Verified source](https://eth.blockscout.com/address/0x4F67e4d9BD67eFa28236013288737D39AeF48e79?tab=contract): Compound WstETHPriceFeed.

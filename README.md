@@ -1,6 +1,6 @@
 # morpho-fixed-borrow
 
-Manages fixed-rate Morpho Midnight USDC loans (WBTC/USDC and cbBTC/USDC on Ethereum), plus explicitly selected wstETH migrations (see below), signing
+Manages fixed-rate Morpho Midnight USDC loans (WBTC/USDC, cbBTC/USDC and wstETH/USDC on Ethereum; see below for wstETH), signing
 with a Trezor through Foundry's `cast`:
 
 1. **Migrate** a Morpho Blue variable-rate loan into a Midnight fixed-rate market (`migrate`, then `cleanup`).
@@ -115,8 +115,7 @@ of lenders quoting. Then it checks, in order:
 4. Rolling now saves money versus waiting at the reference rate: **ROLL**.
 5. Otherwise **WAIT**.
 
-For wstETH it reads the position in the reviewed market `0x20db…4f03`, but only suggests targets that pass the
-default oracle rule. The best target is the one where rolling now saves the most. For a ROLL it prints the matching `roll` command.
+The best target is the one where rolling now saves the most. For a ROLL it prints the matching `roll` command.
 Fewer than 2 lenders quoting only prints a warning: today a single lender often provides all offers.
 
 ### revoke
@@ -160,14 +159,15 @@ node src/cli.ts roll --loan wbtc --from-maturity 2026-12-25 --maturity 2027-03-2
   `BorrowMidnightToBlueCallback` on Ethereum (`0x7d4A92F88c22c6dD31F0fB67F27cAFC8e90f5F18`) is built for this. Not
   implemented yet; it would need its own source review, sizing rules and fork test before use.
 
-## wstETH: explicitly selected December 2026 market
+## wstETH: reviewed Midnight oracle
 
-Work in the `wsteth-midnight` worktree. wstETH uses 18 decimals. The Blue market is
+wstETH uses 18 decimals. The Blue market is
 `0xb323495f7e4148be5643a4ea4a8221eef163e4bccfdedc2a6f4696baacbc86cc`.
-The reviewed destination is `0x20db6336fa557dab4d29e3d6c3eaca63d99911b8d9106c4642c165b054ce4f03`,
-maturing **2026-12-25 15:00 UTC**. Both use 86% LLTV, but the destination uses a different oracle.
-The default same-oracle search still excludes it. Use `--market` explicitly for quote, migrate, cleanup and status.
-Only this exact destination permits the reviewed source/destination oracle exception; other markets remain strict.
+The first destination was `0x20db6336fa557dab4d29e3d6c3eaca63d99911b8d9106c4642c165b054ce4f03`,
+maturing **2026-12-25 15:00 UTC**. Both use 86% LLTV, but the Midnight markets use a different oracle than the Blue market.
+For this Blue market only, Midnight markets may use either the Blue oracle `0x48F7…40e2` or the reviewed Midnight oracle
+below, at any maturity, so `quote`, `status`, `roll` and `advise` find them without `--market`. All other markets must
+use the Blue market's own oracle. `--market` still restricts a command to one exact market.
 
 Destination oracle `0xe087ad7fe989cf63f8383579d160a20ee7e69f9f` is verified MorphoChainlinkOracleV2:
 base feeds `0x4F67e4d9BD67eFa28236013288737D39AeF48e79` (custom wstETH/ETH) and
@@ -197,8 +197,12 @@ Migration-only fork rehearsal (no Trezor, no mainnet writes):
 LOAN=wsteth MARKET="$MARKET" SKIP_ROLL=1 npm run test:fork
 ```
 
-A roll from this different-oracle market to a future market is not validated by this rehearsal. Arrange repayment
-or separately validate a renewal destination **before maturity**; post-maturity positions are liquidatable.
+Rehearse a roll into a later market that uses the reviewed oracle on a fork before running it for real, and do it
+**before maturity**; post-maturity positions are liquidatable:
+
+```sh
+LOAN=wsteth MATURITY=2026-12-25 ROLL_MATURITY=2027-01-29 npm run test:fork
+```
 
 ## Local CI checks
 

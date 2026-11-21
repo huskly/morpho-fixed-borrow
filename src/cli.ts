@@ -23,7 +23,6 @@ import {
   MORPHO_BLUE,
   RENEWAL_CALLBACK,
   USDC,
-  WSTETH_DESTINATION,
   type LoanConfig,
 } from "./config.ts";
 import {
@@ -69,7 +68,7 @@ Commands:
 Options:
   --loan          ${Object.keys(LOANS).join(" | ")}
   --ref           Blue borrow rate average used as the reference by advise: 7d (default) | 1m
-  --market        Exact destination market id (required for the reviewed wstETH oracle exception)
+  --market        Use only this exact Midnight market id
   --from          Your address (default: $ETH_FROM)
   --rpc-url       Ethereum RPC (default: $ETH_RPC_URL or ${DEFAULT_RPC})
   --signer        trezor (default) | unlocked (local anvil fork only)
@@ -265,7 +264,7 @@ async function quote(client: PublicClient, user: Address) {
   const blue = await readBlue(client, loan.blueMarketId, user);
   const size = blue.debt > 0n ? blue.debt : 10n ** 9n;
   console.log(
-    `${loan.symbol}/USDC fixed borrow quotes for ${usd(size)} USDC (same collateral/LLTV; explicit --market may use the reviewed oracle exception):`,
+    `${loan.symbol}/USDC fixed borrow quotes for ${usd(size)} USDC (same collateral, LLTV and oracle as the Blue market):`,
   );
   for (const c of await findMirrorMarkets(
     blue.marketParams,
@@ -821,20 +820,14 @@ async function adviseRolls(client: PublicClient, user: Address) {
   const now = (await client.getBlock()).timestamp;
   for (const loan of loans) {
     const blue = await readBlue(client, loan.blueMarketId, user);
-    // Targets follow the default oracle rule. The reviewed wstETH market is only read as a source.
-    const [mirrors, reviewed, refApy] = await Promise.all([
+    const [mirrors, refApy] = await Promise.all([
       findMirrorMarkets(blue.marketParams),
-      findMirrorMarkets(blue.marketParams, WSTETH_DESTINATION),
       blueBorrowApy(loan.blueMarketId, window),
     ]);
-    const markets = [
-      ...mirrors,
-      ...reviewed.filter((r) => !mirrors.some((m) => m.id === r.id)),
-    ];
     const positions = await Promise.all(
-      markets.map((c) => readMidnightPosition(client, c, user)),
+      mirrors.map((c) => readMidnightPosition(client, c, user)),
     );
-    const sources = markets
+    const sources = mirrors
       .map((c, i) => ({ c, debt: positions[i].debt }))
       .filter((s) => s.debt > 0n);
     console.log(
@@ -896,11 +889,7 @@ async function adviseRolls(client: PublicClient, user: Address) {
       );
       for (const w of t.warnings)
         console.log(`    Warning: ${w}; liquidity can disappear quickly.`);
-      if (a.action === "roll" && !mirrors.some((m) => m.id === source.id)) {
-        console.log(
-          "    roll does not support rolling out of the reviewed wstETH market yet.",
-        );
-      } else if (a.action === "roll") {
+      if (a.action === "roll") {
         const suggestedMax = (Math.ceil(t.apr * 1000 + 1) / 10).toFixed(1);
         console.log(
           `    node src/cli.ts roll --loan ${Object.keys(LOANS).find((k) => LOANS[k] === loan)} ` +
