@@ -10,7 +10,7 @@ import {
   walletActions,
   type Address,
 } from "viem";
-import { blueAbi, midnightAbi } from "../src/abi.ts";
+import { blueAbi, erc20Abi, midnightAbi } from "../src/abi.ts";
 import {
   CALLBACK,
   DEFAULT_RPC,
@@ -58,7 +58,9 @@ async function cli(...args: string[]) {
     [
       "src/cli.ts",
       ...args,
-      ...(process.env.MARKET ? ["--market", process.env.MARKET] : []),
+      ...(process.env.MARKET && !args.includes("--market")
+        ? ["--market", process.env.MARKET]
+        : []),
       "--from",
       USER,
       "--rpc-url",
@@ -75,6 +77,20 @@ async function cli(...args: string[]) {
   });
   console.log(stdout);
   return stdout;
+}
+
+// Gives the impersonated account USDC on the fork, taken from Morpho Blue's balance.
+async function fundUsdc(amount: bigint) {
+  await client.setBalance({ address: MORPHO_BLUE, value: 10n ** 18n });
+  await client.impersonateAccount({ address: MORPHO_BLUE });
+  await client.writeContract({
+    account: MORPHO_BLUE,
+    chain: null,
+    address: USDC,
+    abi: transferAbi,
+    functionName: "transfer",
+    args: [USER, amount],
+  });
 }
 
 before(async () => {
@@ -138,17 +154,7 @@ for (const [key, loan] of Object.entries(LOANS).filter(
     );
     assert.ok(pos.collateral > 0n && pos.collateral <= before.collateral);
 
-    // Fund the wallet with a little USDC for the dust repayment (taken from Morpho Blue's balance on the fork).
-    await client.setBalance({ address: MORPHO_BLUE, value: 10n ** 18n });
-    await client.impersonateAccount({ address: MORPHO_BLUE });
-    await client.writeContract({
-      account: MORPHO_BLUE,
-      chain: null,
-      address: USDC,
-      abi: transferAbi,
-      functionName: "transfer",
-      args: [USER, 100n * 10n ** 6n],
-    });
+    await fundUsdc(100n * 10n ** 6n);
     await cli("cleanup", "--loan", key, "--maturity", MATURITY);
     const done = await readBlue(client, loan.blueMarketId, USER);
     const final = await readMidnightPosition(client, target, USER);
@@ -231,6 +237,56 @@ for (const [key, loan] of Object.entries(LOANS).filter(
     assert.ok(healthy);
   });
 }
+
+test("repay part of a Midnight loan", async (t) => {
+  const key = process.env.LOAN ?? "wsteth";
+  const loan = LOANS[key];
+  if (!loan) return t.skip(`unknown LOAN ${key}`);
+  const { marketParams } = await readBlue(client, loan.blueMarketId, USER);
+  const positions = await Promise.all(
+    (await findMirrorMarkets(marketParams)).map(async (c) => ({
+      c,
+      pos: await readMidnightPosition(client, c, USER),
+    })),
+  );
+  const source = positions.find(({ pos }) => pos.debt > 0n);
+  if (!source) return t.skip("no Midnight debt to repay");
+  const amount = 10n * 10n ** 6n;
+  const balance = await client.readContract({
+    address: USDC,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: [USER],
+  });
+  if (balance < amount) await fundUsdc(amount - balance);
+
+  await cli(
+    "repay",
+    "--loan",
+    key,
+    "--market",
+    source.c.id,
+    "--maturity",
+    isoDate(source.c.market.maturity),
+    "--amount",
+    "10",
+  );
+  const after = await readMidnightPosition(client, source.c, USER);
+  assert.equal(
+    source.pos.debt - after.debt,
+    amount,
+    "debt should drop by the repaid amount",
+  );
+  assert.equal(after.collateral, source.pos.collateral, "collateral stays");
+  assert.ok(
+    await client.readContract({
+      address: MIDNIGHT,
+      abi: midnightAbi,
+      functionName: "isHealthy",
+      args: [source.c.market, source.c.id, USER],
+    }),
+  );
+});
 
 test("revoke removes all authorizations", async () => {
   await cli("revoke");

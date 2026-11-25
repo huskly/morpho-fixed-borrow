@@ -52,6 +52,7 @@ node src/cli.ts quote   --loan wbtc                      # fixed rates for every
 node src/cli.ts migrate --loan wbtc --maturity 2026-12-25 --max-rate 4.5     # optionally --amount 50000
 node src/cli.ts cleanup --loan wbtc --maturity 2026-12-25
 node src/cli.ts roll    --loan wbtc --from-maturity 2026-12-25 --maturity 2027-03-26 --max-rate 6
+node src/cli.ts repay   --loan wsteth --maturity 2026-12-25 --amount 10000   # partial early repayment
 node src/cli.ts advise                                   # roll now or wait, and into which maturity
 node src/cli.ts revoke
 ```
@@ -92,6 +93,18 @@ rest.
 
 If Midnight's settlement fee for USDC becomes non-zero (it is 0 today), the proceeds can change by one unit between
 simulation and mining. The take then reverts with `ExcessRepayment` (only gas is lost); re-run `roll`.
+
+### repay
+
+Repays part of a Midnight loan before maturity from the wallet's USDC. Sends up to two transactions: approve USDC to
+Midnight, then `repay()`. Collateral stays on the market.
+
+Midnight records the debt as the amount owed at maturity, interest included, and `repay` retires it 1:1 in the loan
+token: repaying early costs the same USDC as repaying at maturity, so it is a prepayment, not an interest saving. It
+lowers the amount due at maturity and raises the health factor. That matters because a position becomes liquidatable
+before maturity once its debt exceeds the maximum borrowable amount (`HF` below 1 in `status`); after maturity anyone
+can liquidate it regardless. The plan prints the debt and health factor before and after. `--amount` is required (pass
+the full debt to repay it all). If several markets share the maturity, the one holding your debt is used.
 
 ### advise
 

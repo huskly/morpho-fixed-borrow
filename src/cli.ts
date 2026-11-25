@@ -61,6 +61,8 @@ Commands:
                                Repay leftover Blue debt from your USDC and move leftover collateral
   roll     --loan L --from-maturity YYYY-MM-DD --maturity YYYY-MM-DD --max-rate PCT [--amount USDC]
                                Roll the Midnight loan into a later maturity in one take()
+  repay    --loan L --maturity YYYY-MM-DD --amount USDC
+                               Repay part of the Midnight loan early, at face value (1 USDC per unit)
   advise   [--loan L] [--ref 7d|1m] [--max-rate PCT]
                                Whether to roll each Midnight loan now or wait, and into which maturity
   revoke                       Remove the callbacks' authorizations on Blue and Midnight
@@ -640,6 +642,82 @@ async function cleanup(client: PublicClient, sender: Sender) {
   await status(client, user);
 }
 
+// Midnight's debt is the amount owed at maturity (interest included) and repay retires it 1:1 in the loan token,
+// so repaying early buys down the maturity debt without a discount; the point is the health-factor cushion.
+async function repay(client: PublicClient, sender: Sender) {
+  const user = sender.from;
+  const loan = loanArg();
+  const maturity = required("maturity");
+  const amount = parseUnits(required("amount"), USDC_DECIMALS);
+  const blue = await readBlue(client, loan.blueMarketId, user);
+  // Several markets can share a maturity, so pick the one holding this account's debt.
+  const withDebt = [];
+  for (const c of await findMirrorMarkets(
+    blue.marketParams,
+    opts.market as Hex | undefined,
+  )) {
+    if (isoDate(c.market.maturity) !== maturity) continue;
+    const pos = await readMidnightPosition(client, c, user);
+    if (pos.debt > 0n) withDebt.push({ c, pos });
+  }
+  if (!withDebt.length)
+    return console.log(
+      `No ${loan.symbol}/USDC Midnight debt maturing ${maturity}.`,
+    );
+  if (withDebt.length > 1)
+    throw new Error(
+      `debt on several ${maturity} markets; pass --market: ${withDebt.map(({ c }) => c.id).join(", ")}`,
+    );
+  const [{ c, pos }] = withDebt;
+  const { lltv, oracle } = c.market.collateralParams[c.collateralIndex];
+  const price = await oraclePrice(client, oracle);
+  const now = (await client.getBlock()).timestamp;
+  if (amount <= 0n || amount > pos.debt)
+    throw new Error(
+      `--amount must be between 0 and ${usd(pos.debt)} (the debt at maturity)`,
+    );
+  const balance = await client.readContract({
+    address: USDC,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: [user],
+  });
+  if (balance < amount)
+    throw new Error(
+      `need ${usd(amount)} USDC in the wallet to repay, have ${usd(balance)}`,
+    );
+  const hf = (debt: bigint) => healthFactor(pos.collateral, price, lltv, debt);
+  console.log(
+    `Midnight ${isoDate(c.market.maturity)} (${daysLeft(c.market.maturity, now)}): owes ${usd(pos.debt)} USDC at maturity, ` +
+      `${formatUnits(pos.collateral, loan.decimals, 8)} ${loan.symbol}, HF ${hf(pos.debt)}`,
+  );
+  console.log(
+    `Repay ${usd(amount)} USDC now: owes ${usd(pos.debt - amount)} USDC at maturity, HF ${hf(pos.debt - amount)}`,
+  );
+  console.log(
+    "Repay is at face value (1 USDC per unit owed at maturity): it buys down the maturity debt without a discount.",
+  );
+  await confirm(
+    sender,
+    `Repay ${usd(amount)} USDC of the ${isoDate(c.market.maturity)} ${loan.symbol}/USDC loan?`,
+  );
+  await checkSigner(sender);
+  await ensureAllowance(client, sender, USDC, "USDC", MIDNIGHT, amount);
+  await send(
+    client,
+    sender,
+    `Repay ${usd(amount)} USDC (Midnight.repay)`,
+    MIDNIGHT,
+    encodeFunctionData({
+      abi: midnightAbi,
+      functionName: "repay",
+      args: [c.market, amount, user, zeroAddress, "0x"],
+    }),
+  );
+  console.log("\nDone. Current state:");
+  await status(client, user);
+}
+
 type RollPlan = Awaited<ReturnType<typeof planRoll>>;
 
 // Sizes the new loan so its proceeds repay the source debt exactly: the renewal callback then moves all collateral
@@ -994,6 +1072,8 @@ async function main() {
       return cleanup(client, sender);
     case "roll":
       return roll(client, sender);
+    case "repay":
+      return repay(client, sender);
     case "advise":
       return adviseRolls(client, sender.from);
     case "revoke":

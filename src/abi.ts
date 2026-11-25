@@ -629,6 +629,103 @@ export const midnightAbi = [
     type: "function",
   },
   {
+    inputs: [
+      {
+        components: [
+          {
+            internalType: "uint256",
+            name: "chainId",
+            type: "uint256",
+          },
+          {
+            internalType: "address",
+            name: "midnight",
+            type: "address",
+          },
+          {
+            internalType: "address",
+            name: "loanToken",
+            type: "address",
+          },
+          {
+            components: [
+              {
+                internalType: "address",
+                name: "token",
+                type: "address",
+              },
+              {
+                internalType: "uint256",
+                name: "lltv",
+                type: "uint256",
+              },
+              {
+                internalType: "uint256",
+                name: "liquidationCursor",
+                type: "uint256",
+              },
+              {
+                internalType: "address",
+                name: "oracle",
+                type: "address",
+              },
+            ],
+            internalType: "struct CollateralParams[]",
+            name: "collateralParams",
+            type: "tuple[]",
+          },
+          {
+            internalType: "uint256",
+            name: "maturity",
+            type: "uint256",
+          },
+          {
+            internalType: "uint256",
+            name: "rcfThreshold",
+            type: "uint256",
+          },
+          {
+            internalType: "address",
+            name: "enterGate",
+            type: "address",
+          },
+          {
+            internalType: "address",
+            name: "liquidatorGate",
+            type: "address",
+          },
+        ],
+        internalType: "struct Market",
+        name: "market",
+        type: "tuple",
+      },
+      {
+        internalType: "uint256",
+        name: "units",
+        type: "uint256",
+      },
+      {
+        internalType: "address",
+        name: "onBehalf",
+        type: "address",
+      },
+      {
+        internalType: "address",
+        name: "callback",
+        type: "address",
+      },
+      {
+        internalType: "bytes",
+        name: "data",
+        type: "bytes",
+      },
+    ],
+    name: "repay",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
     inputs: [],
     name: "AlreadyConsumed",
     type: "error",
